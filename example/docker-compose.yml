@@ -1,0 +1,38 @@
+services:
+  traefik:
+    image: "traefik:v2.7.1"
+    command:
+      - "--log.format=json"
+      - "--log.level=debug"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--experimental.localPlugins.apimanagerplugin.moduleName=github.com/MGDIS/traefik-apimanager-plugin"
+    ports:
+      - "80:80"
+      - "8080:8080"   # Traefik dashboard
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"  # Docker socket for Traefik to monitor containers
+      - "./plugins-local:/plugins-local"            # Plugin directory
+
+  apimanager:
+    build: ./fake-apimanager
+
+  app:
+    build: ./awesome-service
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.entrypoints=web"
+      - "traefik.http.routers.app.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.app.middlewares=apimanager"
+      - "traefik.http.services.service-foo.loadbalancer.server.port=8080"
+
+      # Plugin middleware configuration
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.apiManagerURL=http://apimanager:8080/auth"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.authMode=oauth2"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.clientID=clientID"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.clientSecret=clientSecret"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.username=username"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.password=password"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.grantType=grantType"
+      - "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.paths=^/demo$,^/demo/.+$,^/foobar/.*$"
