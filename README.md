@@ -6,6 +6,8 @@ Traefik plugin to automatically call API Manager to replace requests headers.
 
 The aim of this plugin is to update requests authorization header on the fly by calling an API Manager before.
 
+When the plugin call the API Manager, it will retrieve a new token and update the `Authorization` request header with the new token. The original authorization header will be saved in a new header named `X-Forwarded-Authorization`.
+
 ## Installation
 
 To install the plugin, you must add the plugin to your traefik configuration file :
@@ -92,4 +94,47 @@ Do not forget to declare the middleware plugin on your containers like this :
 
 ```yaml
 - "traefik.http.routers.app.middlewares=apimanager"
+```
+
+## Example
+
+The `example` folder contains a docker compose file with a traefik configuration and a simple web server to test the plugin.
+
+The example app is a simple web server that returns a JSON object that display received `Authorization` and `X-Forwarded-Authorization` headers.
+
+Here the following Path restriction configuration :
+
+```yaml
+- "traefik.http.middlewares.apimanager.plugin.apimanagerplugin.paths=^/demo$,^/demo/.+$,^/foobar/.*$"
+```
+
+**Example with an ignored path:**
+
+```sh
+curl -s http://localhost/foobar | jq
+```
+
+Response :
+```json
+{
+  "message": "Hello world !",
+  "headers": {}
+}
+```
+
+**Example with a valid path:**
+
+```sh
+curl -s -H "Authorization: Bearer xxxxxxxxx" http://localhost/demo | jq
+```
+
+Response :
+```json
+{
+  "message": "Hello world !",
+  "headers": {
+    "Authorization": "Bearer fejHKnq8r92u94puqy1rSkUNCWBXmL6k",
+    "X-Forwarded-Authorization": "Bearer xxxxxxxxx"
+  }
+}
 ```
