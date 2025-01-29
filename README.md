@@ -6,7 +6,7 @@ Traefik plugin to automatically call API Manager to replace requests headers.
 
 The aim of this plugin is to update requests authorization header on the fly by calling an API Manager before.
 
-When the plugin call the API Manager, it will retrieve a new token and update the `Authorization` request header with the new token. The original authorization header will be saved in a new header named `X-Forwarded-Authorization`.
+When the plugin call the API Manager, it will retrieve a new token and update the `Authorization` request header with the new token. The original authorization header will be saved in a new header named `X-Forwarded-Authorization`. We rely on the API Manager to put the `X-Forwarded-Authorization` header back in place after the negotiation. 
 
 ## Installation
 
@@ -78,7 +78,7 @@ The following informations are needed :
 
 ### Path restriction
 
-This plugin can be restricted on a defined list of path of your containers. 
+This plugin can be restricted on a defined list of paths of your container's enpoints. 
 
 To use the path restriction mode, you need to set the `paths` variable with a regex paths array :
 

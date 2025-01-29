@@ -4,7 +4,7 @@ iconPath: .assets/icon.png
 
 import: github.com/MGDIS/traefik-apimanager-plugin
 
-summary: 'Traefik plugin to automatically call API Manager to replace requests headers'
+summary: 'Traefik plugin to automatically negotiate with the API Manager, ensure authentication and manage requests headers'
 
 testData:
   authMode: 'oauth2'
