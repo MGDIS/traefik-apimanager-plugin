@@ -1,0 +1,15 @@
+displayName: API Manager Plugin
+type: middleware
+iconPath: .assets/icon.png
+
+import: github.com/MGDIS/traefik-apimanager-plugin
+
+summary: 'Traefik plugin to automatically negotiate with the API Manager, ensure authentication and manage requests headers'
+
+testData:
+  authMode: 'oauth2'
+  apiManagerURL: 'https://api-manager-url'
+  clientID: 'client_id'
+  username: 'user'
+  password: 'pass'
+  grantType: 'password'
