@@ -3,24 +3,49 @@ package traefik_apimanager_plugin_test
 import (
 	"bytes"
 	"context"
-	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	apimanager "github.com/MGDIS/traefik-apimanager-plugin"
 )
 
-type logCapture struct {
-	buf bytes.Buffer
+// captureStdout captures everything written to stdout during fn execution
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	old := os.Stdout
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	fn() // Execute the function that writes to stdout
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("failed to read from pipe: %v", err)
+	}
+
+	return buf.String()
 }
 
-func (lc *logCapture) Write(p []byte) (n int, err error) {
-	return lc.buf.Write(p)
-}
+// assertLogContains checks if the log output contains expected messages
+func assertLogContains(t *testing.T, logOutput string, expectedMessages ...string) {
+	t.Helper()
 
-func (lc *logCapture) String() string {
-	return lc.buf.String()
+	for _, msg := range expectedMessages {
+		if !strings.Contains(logOutput, msg) {
+			t.Errorf("expected log to contain %q, but got %q", msg, logOutput)
+		}
+	}
 }
 
 func assertHeader(t *testing.T, req *http.Request, key, expected string) {
@@ -32,49 +57,43 @@ func assertHeader(t *testing.T, req *http.Request, key, expected string) {
 }
 
 func TestEmptyAuthModeLog(t *testing.T) {
-	// Capture log output
-	lc := &logCapture{}
-	log.SetOutput(lc)
-
 	cfg := apimanager.CreateConfig()
 	cfg.AuthMode = ""
 
 	ctx := context.Background()
 	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
 
-	_, err := apimanager.New(ctx, next, cfg, "apimanager-plugin")
-	if err != nil {
-		t.Fatal(err)
-	}
+	logOutput := captureStdout(t, func() {
+		_, err := apimanager.New(ctx, next, cfg, "apimanager-plugin")
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 
-	logOutput := lc.String()
-	expectedMessage := "traefik-api-manager - empty auth mode"
-	if !bytes.Contains([]byte(logOutput), []byte(expectedMessage)) {
-		t.Errorf("expected log message %q, but got %q", expectedMessage, logOutput)
-	}
+	assertLogContains(t, logOutput,
+		"traefik-api-manager - empty auth mode",
+		"traefik-api-manager - default auth mode used",
+	)
 }
 
 func TestInvalidAuthModeLog(t *testing.T) {
-	// Capture log output
-	lc := &logCapture{}
-	log.SetOutput(lc)
-
 	cfg := apimanager.CreateConfig()
-	cfg.AuthMode = "wrong"
+	cfg.AuthMode = "invalid"
 
 	ctx := context.Background()
 	next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {})
 
-	_, err := apimanager.New(ctx, next, cfg, "apimanager-plugin")
-	if err != nil {
-		t.Fatal(err)
-	}
+	logOutput := captureStdout(t, func() {
+		_, err := apimanager.New(ctx, next, cfg, "apimanager-plugin")
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 
-	logOutput := lc.String()
-	expectedMessage := "traefik-api-manager - invalid auth mode"
-	if !bytes.Contains([]byte(logOutput), []byte(expectedMessage)) {
-		t.Errorf("expected log message %q, but got %q", expectedMessage, logOutput)
-	}
+	assertLogContains(t, logOutput,
+		"traefik-api-manager - invalid auth mode",
+		"traefik-api-manager - default auth mode used",
+	)
 }
 
 func TestAPIManagerPluginDefault(t *testing.T) {
