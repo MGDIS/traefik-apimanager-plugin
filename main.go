@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -45,6 +46,7 @@ type APIManagerPlugin struct {
 	headerValue   string
 	paths         []string
 	scope         string
+	logger        *slog.Logger
 }
 
 type APIManagerQuery struct {
@@ -60,14 +62,18 @@ type APIManagerResponse struct {
 
 // New - create a new instance of APIManagerPlugin
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
+
+	// logger instance
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
 	// if config.AuthMode is not set or different from "oauth2" or "apikey" log a message "no auth mode set or invalid auth mode"
 	if config.AuthMode != "oauth2" && config.AuthMode != "apikey" {
 		if config.AuthMode == "" {
-			log.Print("traefik-api-manager - empty auth mode")
+			logger.Info("traefik-api-manager - empty auth mode")
 		} else {
-			log.Print("traefik-api-manager - invalid auth mode")
+			logger.Error("traefik-api-manager - invalid auth mode")
 		}
-		log.Print("traefik-api-manager - default auth mode used (required: oauth2 or apikey)")
+		logger.Info("traefik-api-manager - default auth mode used (required: oauth2 or apikey)")
 	}
 
 	return &APIManagerPlugin{
@@ -84,6 +90,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		headerValue:   config.HeaderValue,
 		paths:         config.Paths,
 		name:          name,
+		logger:        logger,
 	}, nil
 }
 
@@ -95,12 +102,13 @@ func (a *APIManagerPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	log.Printf("traefik-api-manager - processing request: %s %s", req.Method, req.URL.Path)
+	a.logger.Info("traefik-api-manager - processing request", slog.String("method", req.Method), slog.String("path", req.URL.Path))
 
 	switch a.authMode {
 	case "oauth2":
 		token, err := a.getOAuth2AccessToken()
 		if err != nil {
+			a.logger.Error("traefik-api-manager - failed to retrieve access token", slog.String("error", err.Error()))
 			http.Error(rw, "Failed to retrieve access token", http.StatusInternalServerError)
 			return
 		}
