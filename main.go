@@ -62,7 +62,6 @@ type APIManagerResponse struct {
 
 // New - create a new instance of APIManagerPlugin
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
-
 	// logger instance
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
@@ -194,6 +193,25 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return "", err
 	}
+
+	a.logger.Info("getting an access token from remote API manager",
+		slog.String("plugin", "traefik-api-manager"),
+		slog.String("username", a.username),
+		slog.String("password", a.password),
+		slog.String("grantType", a.grantType),
+		slog.String("scope", a.scope),
+		slog.String("clientID", a.clientID),
+		slog.String("clientSecret", a.clientSecret),
+		slog.String("url", a.apiManagerURL),
+		slog.String("method", "POST"),
+		slog.String("body", string(requestBody)),
+		slog.Any("headers", map[string]string{
+			"Content-Type":  "application/json",
+			"Authorization": "Basic " + auth,
+		}),
+		slog.String("receivedBody", string(body)),
+		slog.String("parsedAccessToken", apiResp.AccessToken),
+	)
 
 	return apiResp.AccessToken, nil
 }
