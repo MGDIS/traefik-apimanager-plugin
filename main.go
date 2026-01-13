@@ -63,7 +63,20 @@ type APIManagerResponse struct {
 // New - create a new instance of APIManagerPlugin
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
 	// logger instance
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	var logLevel slog.Leveler
+	switch os.Getenv("TRAEFIK_API_MANAGER_PLUGIN_LOG_LEVEL") {
+	case "DEBUG", "debug":
+		logLevel = slog.LevelDebug
+	case "INFO", "info":
+		logLevel = slog.LevelInfo
+	case "WARN", "warn":
+		logLevel = slog.LevelWarn
+	case "ERROR", "error":
+		logLevel = slog.LevelError
+	default:
+		logLevel = slog.LevelInfo
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 
 	// if config.AuthMode is not set or different from "oauth2" or "apikey" log a message "no auth mode set or invalid auth mode"
 	if config.AuthMode != "oauth2" && config.AuthMode != "apikey" {
@@ -189,29 +202,71 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 		return "", err
 	}
 
-	var apiResp APIManagerResponse
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return "", err
+	if resp.StatusCode != http.StatusOK {
+		a.logger.Debug("API manager returned an error",
+			slog.String("plugin", "traefik-api-manager"),
+			slog.String("username", a.username),
+			slog.String("password", a.password),
+			slog.String("grantType", a.grantType),
+			slog.String("scope", a.scope),
+			slog.String("clientID", a.clientID),
+			slog.String("clientSecret", a.clientSecret),
+			slog.String("url", a.apiManagerURL),
+			slog.String("method", "POST"),
+			slog.Any("headers", map[string]string{
+				"Content-Type":  "application/json",
+				"Authorization": "Basic " + auth,
+			}),
+			slog.Int("statusCode", resp.StatusCode),
+			slog.String("receivedBody", string(body)),
+		)
+
+		return "", fmt.Errorf("API manager returned a %v status code", resp.StatusCode)
 	}
 
-	a.logger.Info("getting an access token from remote API manager",
-		slog.String("plugin", "traefik-api-manager"),
-		slog.String("username", a.username),
-		slog.String("password", a.password),
-		slog.String("grantType", a.grantType),
-		slog.String("scope", a.scope),
-		slog.String("clientID", a.clientID),
-		slog.String("clientSecret", a.clientSecret),
-		slog.String("url", a.apiManagerURL),
-		slog.String("method", "POST"),
-		slog.String("body", string(requestBody)),
-		slog.Any("headers", map[string]string{
-			"Content-Type":  "application/json",
-			"Authorization": "Basic " + auth,
-		}),
-		slog.String("receivedBody", string(body)),
-		slog.String("parsedAccessToken", apiResp.AccessToken),
-	)
+	var apiResp APIManagerResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		a.logger.Debug("unable to parse JSON response from remote API manager",
+			slog.String("plugin", "traefik-api-manager"),
+			slog.String("username", a.username),
+			slog.String("password", a.password),
+			slog.String("grantType", a.grantType),
+			slog.String("scope", a.scope),
+			slog.String("clientID", a.clientID),
+			slog.String("clientSecret", a.clientSecret),
+			slog.String("url", a.apiManagerURL),
+			slog.String("method", "POST"),
+			slog.Any("headers", map[string]string{
+				"Content-Type":  "application/json",
+				"Authorization": "Basic " + auth,
+			}),
+			slog.Int("statusCode", resp.StatusCode),
+			slog.String("receivedBody", string(body)),
+			slog.String("error", err.Error()),
+		)
+
+		return "", err
+	} else if apiResp.AccessToken == "" {
+		a.logger.Debug("received access_token from API manager is a empty string",
+			slog.String("plugin", "traefik-api-manager"),
+			slog.String("username", a.username),
+			slog.String("password", a.password),
+			slog.String("grantType", a.grantType),
+			slog.String("scope", a.scope),
+			slog.String("clientID", a.clientID),
+			slog.String("clientSecret", a.clientSecret),
+			slog.String("url", a.apiManagerURL),
+			slog.String("method", "POST"),
+			slog.Any("headers", map[string]string{
+				"Content-Type":  "application/json",
+				"Authorization": "Basic " + auth,
+			}),
+			slog.Int("statusCode", resp.StatusCode),
+			slog.String("receivedBody", string(body)),
+		)
+
+		return "", fmt.Errorf("parsed access_token is an empty string")
+	}
 
 	return apiResp.AccessToken, nil
 }
