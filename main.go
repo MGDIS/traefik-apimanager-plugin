@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -168,24 +169,22 @@ func (a *APIManagerPlugin) checkPathMatching(path string) bool {
 
 // getOAuth2AccessToken - call API manager with OAuth 2.0 protocol to get an access token
 func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
-	query := APIManagerQuery{
-		Username:  a.username,
-		Password:  a.password,
-		GrantType: a.grantType,
-		Scope:     a.scope,
+	query := url.Values{}
+	query.Set("grant_type", a.grantType)
+	query.Set("username", a.username)
+	query.Set("password", a.password)
+	if a.scope != "" {
+		query.Set("scope", a.scope)
 	}
 
-	requestBody, err := json.Marshal(query)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request body: %v", err)
-	}
+	requestBody := []byte(query.Encode())
 
 	req, err := http.NewRequest("POST", a.apiManagerURL, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create POST request: %v", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", a.clientID, a.clientSecret)))
 	req.Header.Set("Authorization", "Basic "+auth)
