@@ -212,10 +212,7 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 			slog.String("clientSecret", a.clientSecret),
 			slog.String("url", a.apiManagerURL),
 			slog.String("method", "POST"),
-			slog.Any("headers", map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Basic " + auth,
-			}),
+			slog.Any("headers", req.Header),
 			slog.Int("statusCode", resp.StatusCode),
 			slog.String("receivedBody", string(body)),
 		)
@@ -235,10 +232,7 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 			slog.String("clientSecret", a.clientSecret),
 			slog.String("url", a.apiManagerURL),
 			slog.String("method", "POST"),
-			slog.Any("headers", map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Basic " + auth,
-			}),
+			slog.Any("headers", req.Header),
 			slog.Int("statusCode", resp.StatusCode),
 			slog.String("receivedBody", string(body)),
 			slog.String("error", err.Error()),
@@ -256,10 +250,7 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 			slog.String("clientSecret", a.clientSecret),
 			slog.String("url", a.apiManagerURL),
 			slog.String("method", "POST"),
-			slog.Any("headers", map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Basic " + auth,
-			}),
+			slog.Any("headers", req.Header),
 			slog.Int("statusCode", resp.StatusCode),
 			slog.String("receivedBody", string(body)),
 		)
