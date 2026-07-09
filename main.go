@@ -12,7 +12,10 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 type Config struct {
@@ -27,6 +30,7 @@ type Config struct {
 	HeaderValue   string   `json:"headerValue,omitempty"`
 	Paths         []string `json:"paths,omitempty"`
 	Scope         string   `json:"scope,omitempty"`
+	Margin        int      `json:"margin,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -48,6 +52,14 @@ type APIManagerPlugin struct {
 	paths         []string
 	scope         string
 	logger        *slog.Logger
+
+	margin time.Duration
+
+	mu          sync.RWMutex
+	token       string
+	tokenExpiry time.Time
+
+	fetchMu sync.Mutex
 }
 
 type APIManagerQuery struct {
@@ -58,8 +70,34 @@ type APIManagerQuery struct {
 }
 
 type APIManagerResponse struct {
-	AccessToken string `json:"access_token"`
+	AccessToken string  `json:"access_token"`
+	ExpiresIn   flexInt `json:"expires_in"`
 }
+
+// flexInt is an int that unmarshals from either a JSON number (3600) or a
+// JSON string ("3600"). RFC 6749 §5.1 shows expires_in unquoted, but some API
+// managers emit it quoted; accepting both keeps a valid token from being
+// discarded over a formatting quirk.
+type flexInt int
+
+func (n *flexInt) UnmarshalJSON(b []byte) error {
+	b = bytes.Trim(b, `"`)
+	if len(b) == 0 || string(b) == "null" {
+		*n = 0
+		return nil
+	}
+	v, err := strconv.Atoi(string(b))
+	if err != nil {
+		return err
+	}
+	*n = flexInt(v)
+	return nil
+}
+
+// defaultRefreshMargin is how far before real expiry a cached token is refreshed by
+// default, so an about-to-expire token is never forwarded upstream. Operators may
+// override it with the optional "margin" config (in seconds).
+const defaultRefreshMargin = 30 * time.Second
 
 // New - create a new instance of APIManagerPlugin
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
@@ -89,6 +127,12 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		logger.Info("traefik-api-manager - default auth mode used (required: oauth2 or apikey)")
 	}
 
+	// Refresh margin defaults to a fixed value; operators tune it only if they want.
+	margin := defaultRefreshMargin
+	if config.Margin > 0 {
+		margin = time.Duration(config.Margin) * time.Second
+	}
+
 	return &APIManagerPlugin{
 		next:          next,
 		authMode:      config.AuthMode,
@@ -104,6 +148,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		paths:         config.Paths,
 		name:          name,
 		logger:        logger,
+		margin:        margin,
 	}, nil
 }
 
@@ -119,7 +164,7 @@ func (a *APIManagerPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) 
 
 	switch a.authMode {
 	case "oauth2":
-		token, err := a.getOAuth2AccessToken()
+		token, err := a.getToken()
 		if err != nil {
 			a.logger.Error("traefik-api-manager - failed to retrieve access token", slog.String("error", err.Error()))
 			http.Error(rw, "Failed to retrieve access token", http.StatusInternalServerError)
@@ -167,8 +212,50 @@ func (a *APIManagerPlugin) checkPathMatching(path string) bool {
 	return matched
 }
 
+// getToken - return the cached token, or fetch a fresh one when the cache is empty or
+// expired. The expiry is now + expires_in - margin, so a
+// missing expires_in (0) or a margin larger than the lifetime lands the expiry in the
+// past and the next request simply refetches — no special-casing needed.
+//
+// mu guards the shared cache because Traefik serves requests on multiple goroutines in
+// parallel. fetchMu coalesces refreshes: when the cache is stale, only one goroutine
+// performs the upstream call while the rest wait, then re-read the freshly cached token
+// instead of each firing its own request at the API manager.
+func (a *APIManagerPlugin) getToken() (string, error) {
+	if token, ok := a.cachedToken(); ok {
+		return token, nil
+	}
+
+	a.fetchMu.Lock()
+	defer a.fetchMu.Unlock()
+
+	// Re-check: another goroutine may have refreshed the cache while we waited on fetchMu.
+	if token, ok := a.cachedToken(); ok {
+		return token, nil
+	}
+
+	token, expiresIn, err := a.getOAuth2AccessToken()
+	if err != nil {
+		return "", err
+	}
+
+	a.mu.Lock()
+	a.token = token
+	a.tokenExpiry = time.Now().Add(time.Duration(expiresIn)*time.Second - a.margin)
+	a.mu.Unlock()
+	return token, nil
+}
+
+// cachedToken - return the cached token and whether it is still valid (non-empty and
+// not past its expiry). Guarded by mu for concurrent access.
+func (a *APIManagerPlugin) cachedToken() (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.token, a.token != "" && time.Now().Before(a.tokenExpiry)
+}
+
 // getOAuth2AccessToken - call API manager with OAuth 2.0 protocol to get an access token
-func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
+func (a *APIManagerPlugin) getOAuth2AccessToken() (string, int, error) {
 	query := url.Values{}
 	query.Set("grant_type", a.grantType)
 	query.Set("username", a.username)
@@ -181,7 +268,7 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 
 	req, err := http.NewRequest("POST", a.apiManagerURL, bytes.NewBuffer(requestBody))
 	if err != nil {
-		return "", fmt.Errorf("failed to create POST request: %v", err)
+		return "", 0, fmt.Errorf("failed to create POST request: %v", err)
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -192,13 +279,13 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to send POST request: %v", err)
+		return "", 0, fmt.Errorf("failed to send POST request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -217,7 +304,7 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 			slog.String("receivedBody", string(body)),
 		)
 
-		return "", fmt.Errorf("API manager returned a %v status code", resp.StatusCode)
+		return "", 0, fmt.Errorf("API manager returned a %v status code", resp.StatusCode)
 	}
 
 	var apiResp APIManagerResponse
@@ -238,7 +325,7 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 			slog.String("error", err.Error()),
 		)
 
-		return "", err
+		return "", 0, err
 	} else if apiResp.AccessToken == "" {
 		a.logger.Debug("received access_token from API manager is a empty string",
 			slog.String("plugin", "traefik-api-manager"),
@@ -255,8 +342,8 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, error) {
 			slog.String("receivedBody", string(body)),
 		)
 
-		return "", fmt.Errorf("parsed access_token is an empty string")
+		return "", 0, fmt.Errorf("parsed access_token is an empty string")
 	}
 
-	return apiResp.AccessToken, nil
+	return apiResp.AccessToken, int(apiResp.ExpiresIn), nil
 }
