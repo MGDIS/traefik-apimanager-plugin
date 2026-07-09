@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,8 +70,28 @@ type APIManagerQuery struct {
 }
 
 type APIManagerResponse struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
+	AccessToken string  `json:"access_token"`
+	ExpiresIn   flexInt `json:"expires_in"`
+}
+
+// flexInt is an int that unmarshals from either a JSON number (3600) or a
+// JSON string ("3600"). RFC 6749 §5.1 shows expires_in unquoted, but some API
+// managers emit it quoted; accepting both keeps a valid token from being
+// discarded over a formatting quirk.
+type flexInt int
+
+func (n *flexInt) UnmarshalJSON(b []byte) error {
+	b = bytes.Trim(b, `"`)
+	if len(b) == 0 || string(b) == "null" {
+		*n = 0
+		return nil
+	}
+	v, err := strconv.Atoi(string(b))
+	if err != nil {
+		return err
+	}
+	*n = flexInt(v)
+	return nil
 }
 
 // defaultRefreshMargin is how far before real expiry a cached token is refreshed by
@@ -324,5 +345,5 @@ func (a *APIManagerPlugin) getOAuth2AccessToken() (string, int, error) {
 		return "", 0, fmt.Errorf("parsed access_token is an empty string")
 	}
 
-	return apiResp.AccessToken, apiResp.ExpiresIn, nil
+	return apiResp.AccessToken, int(apiResp.ExpiresIn), nil
 }

@@ -454,6 +454,35 @@ func TestOAuth2TokenIsCached(t *testing.T) {
 	}
 }
 
+// TestOAuth2TokenIsCachedWithStringExpiresIn - some API managers emit expires_in as a
+// JSON string ("3600") rather than a number. The token must still parse and be cached,
+// not rejected: repeated requests reuse it and the API manager is called only once.
+func TestOAuth2TokenIsCachedWithStringExpiresIn(t *testing.T) {
+	var calls int32
+	mockServer := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		if _, err := rw.Write([]byte(`{"access_token": "apimanager_token", "expires_in": "3600"}`)); err != nil {
+			t.Errorf("failed to write response: %v", err)
+		}
+	}))
+	defer mockServer.Close()
+
+	handler, err := apimanager.New(context.Background(), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), oauth2TestConfig(mockServer.URL), "apimanager-plugin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		serveOAuth2(t, handler)
+	}
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("expected string expires_in to be parsed and the token cached (1 call), got %d", got)
+	}
+}
+
 // TestOAuth2TokenRefreshedAfterExpiry - once the server-provided lifetime elapses,
 // the next request re-fetches the token.
 func TestOAuth2TokenRefreshedAfterExpiry(t *testing.T) {
